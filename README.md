@@ -7,7 +7,7 @@
 
 :bell: **News:**
 
-* [2025-01-26] We are happy to announce that DGFusion was accepted in the **IEEE Robotics and Automation Letters**.
+* [2026-01-26] We are happy to announce that DGFusion was accepted in the **IEEE Robotics and Automation Letters**.
 
 ## Overview
 
@@ -198,7 +198,7 @@ If you find this project useful in your research, please consider citing:
 
 ```
 
-@article{broedermann2025dgfusion,
+@article{broedermann2026dgfusion,
   author={Br{\"o}dermann, Tim and Sakaridis, Christos and Piccinelli, Luigi and Abbeloos, Wim and Van Gool, Luc},
   journal={IEEE Robotics and Automation Letters}, 
   title={{DGF}usion: Depth-Guided Sensor Fusion for Robust Semantic Perception}, 
