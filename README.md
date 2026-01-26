@@ -2,6 +2,13 @@
 
 **by [Tim Broedermann](https://people.ee.ethz.ch/~timbr/), [Christos Sakaridis](https://people.ee.ethz.ch/csakarid/), Luigi Piccinelli, Wim Abbeloos, and [Luc Van Gool](https://scholar.google.de/citations?user=TwMib_QAAAAJ&hl=en)**
 
+**[[Paper]](https://doi.org/10.1109/LRA.2026.3656789)**
+**[[arXiv]](https://arxiv.org/pdf/2509.09828)**
+
+:bell: **News:**
+
+* [2025-01-26] We are happy to announce that DGFusion was accepted in the **IEEE Robotics and Automation Letters**.
+
 ## Overview
 
 This repository contains the official code for **DGFusion**, a novel depth-guided multimodal fusion method for robust semantic perception. DGFusion enhances condition-aware fusion by integrating depth information, treating multimodal segmentation as a multi-task problem. It utilizes lidar measurements both as model inputs and as ground truth for learning depth, with an auxiliary depth head that learns depth-aware features. These features are encoded into spatially-varying local depth tokens, which, together with a global condition token, dynamically adapt sensor fusion to the spatially varying reliability of each sensor across the scene. Additionally, DGFusion introduces a robust loss for depth learning, addressing the challenges of sparse and noisy lidar inputs in adverse conditions. Our method achieves state-of-the-art panoptic and semantic segmentation performance on the challenging [MUSES](https://muses.vision.ee.ethz.ch/) and [DeLiVER](https://github.com/jamycheung/DELIVER) datasets.
@@ -193,11 +200,16 @@ If you find this project useful in your research, please consider citing:
 ```
 
 @article{broedermann2025dgfusion,
-  title={DGFusion: Depth-Guided Sensor Fusion for Robust Semantic Perception}, 
   author={Br{\"o}dermann, Tim and Sakaridis, Christos and Piccinelli, Luigi and Abbeloos, Wim and Van Gool, Luc},
-  journal   = {arXiv preprint arXiv:2509.09828},
-  year      = {2025}
-  }
+  journal={IEEE Robotics and Automation Letters}, 
+  title={{DGF}usion: Depth-Guided Sensor Fusion for Robust Semantic Perception}, 
+  year={2026},
+  volume={},
+  number={},
+  pages={1-8},
+  doi={10.1109/LRA.2026.3656789}
+}
+
 ```
 
 ### License:
