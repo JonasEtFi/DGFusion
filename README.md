@@ -13,8 +13,7 @@
 
 This repository contains the official code for **DGFusion**, a novel depth-guided multimodal fusion method for robust semantic perception. DGFusion enhances condition-aware fusion by integrating depth information, treating multimodal segmentation as a multi-task problem. It utilizes lidar measurements both as model inputs and as ground truth for learning depth, with an auxiliary depth head that learns depth-aware features. These features are encoded into spatially-varying local depth tokens, which, together with a global condition token, dynamically adapt sensor fusion to the spatially varying reliability of each sensor across the scene. Additionally, DGFusion introduces a robust loss for depth learning, addressing the challenges of sparse and noisy lidar inputs in adverse conditions. Our method achieves state-of-the-art panoptic and semantic segmentation performance on the challenging [MUSES](https://muses.vision.ee.ethz.ch/) and [DeLiVER](https://github.com/jamycheung/DELIVER) datasets.
 
-[//]: # (![DGFusion Overview Figure]&#40;resources/dgfusion_teaser.png&#41;)
-
+![DGFusion Overview Figure](DGFusion_teaser.png)
 
 ### Contents
 
