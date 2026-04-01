@@ -13,6 +13,7 @@ from .config import *
 from .data.dataset_mappers.muses_unified_dataset_mapper import MUSESUnifiedDatasetMapper
 from .data.dataset_mappers.muses_test_dataset_mapper import MUSESTestDatasetMapper
 from .data.dataset_mappers.deliver_semantic_dataset_mapper import DELIVERSemanticDatasetMapper
+from .data.dataset_mappers.waymo_lidar_semantic_dataset_mapper import WaymoLidarSemanticDatasetMapper
 
 # models
 from .dgfusion import DGFusion

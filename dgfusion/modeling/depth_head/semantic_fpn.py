@@ -66,7 +66,10 @@ class SemanticFPN(nn.Module):
 
     @classmethod
     def from_config(cls, cfg, input_dims):
-        device = torch.device(cfg.MODEL.DEVICE if cfg.MODEL.DEVICE else 'cuda' if torch.cuda.is_available() else 'cpu')
+        device_name = getattr(cfg.MODEL, "DEVICE", "cuda") or "cuda"
+        if device_name.startswith("cuda") and not torch.cuda.is_available():
+            device_name = "cpu"
+        device = torch.device(device_name)
         in_channels = [input_dims[level].channels for level in cfg.MODEL.DEPTH_HEAD.INPUT_LEVELS]
         in_strides = [input_dims[level].stride for level in cfg.MODEL.DEPTH_HEAD.INPUT_LEVELS]
         return {

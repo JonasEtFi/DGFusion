@@ -22,7 +22,7 @@ import numpy as np
 import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
-from detectron2.data import MetadataCatalog
+from detectron2.data import MetadataCatalog, build_detection_train_loader
 from detectron2.engine import (
     DefaultTrainer,
     default_argument_parser,
@@ -79,6 +79,7 @@ from dgfusion import (
     MUSESUnifiedDatasetMapper,
     MUSESTestDatasetMapper,
     DELIVERSemanticDatasetMapper,
+    WaymoLidarSemanticDatasetMapper,
     add_depth_prediction_config,
 )
 
@@ -88,6 +89,7 @@ from time import sleep
 from oneformer.data.build import *
 from oneformer.data.dataset_mappers.dataset_mapper import DatasetMapper
 from PIL import Image
+from dgfusion.data.dataset_mappers.waymo_lidar_semantic_dataset_mapper import REDUCED_CLASS_MAP
 
 def create_deliver_gt_sem_seg_loading_fn(cfg):
     def deliver_gt_sem_seg_loading_fn(filename: str, copy: bool = False, dtype: Optional[Union[np.dtype, str]] = None) -> np.ndarray:
@@ -106,8 +108,34 @@ def create_deliver_gt_sem_seg_loading_fn(cfg):
         return array
 
     return deliver_gt_sem_seg_loading_fn
+
+
+def create_waymo_gt_sem_seg_loading_fn():
+    def waymo_gt_sem_seg_loading_fn(filename: str, copy: bool = False, dtype: Optional[Union[np.dtype, str]] = None) -> np.ndarray:
+        sem_seg_npz = np.load(filename)
+        sem_seg = None
+        for key in ("seg", "label", "labels", "mask", "gt", "semseg", "semantic", "semantics", "class_map"):
+            if key in sem_seg_npz:
+                sem_seg = sem_seg_npz[key]
+                break
+        if sem_seg is None:
+            sem_seg = sem_seg_npz[sem_seg_npz.files[0]]
+        if sem_seg.ndim == 3:
+            sem_seg = sem_seg[..., 0]
+
+        remapped = np.zeros_like(sem_seg, dtype=np.int64)
+        for old_id, new_id in REDUCED_CLASS_MAP.items():
+            remapped[sem_seg == old_id] = new_id
+
+        if copy:
+            remapped = remapped.copy()
+        if dtype is not None:
+            remapped = remapped.astype(dtype, copy=False)
+        return remapped
+
+    return waymo_gt_sem_seg_loading_fn
     
-class Tester(DefaultTrainer):
+class Trainer(DefaultTrainer):
     """
     Extension of the Trainer class adapted to DGFusion for testing only.
     """
@@ -127,11 +155,15 @@ class Tester(DefaultTrainer):
         evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
         # semantic segmentation
         if evaluator_type in ["sem_seg", "ade20k_panoptic_seg"]:
+            sem_seg_kwargs = {}
+            if dataset_name.startswith("waymo_semantic"):
+                sem_seg_kwargs["sem_seg_loading_fn"] = create_waymo_gt_sem_seg_loading_fn()
             evaluator_list.append(
                 SemSegEvaluator(
                     dataset_name,
                     distributed=True,
                     output_dir=output_folder,
+                    **sem_seg_kwargs,
                 )
             )
         # instance segmentation
@@ -285,9 +317,103 @@ class Tester(DefaultTrainer):
             mapper = MUSESTestDatasetMapper(cfg, False)
         elif cfg.INPUT.DATASET_MAPPER_NAME == "deliver_semantic":
             mapper = DELIVERSemanticDatasetMapper(cfg, False)
+        elif cfg.INPUT.DATASET_MAPPER_NAME == "waymo_lidar_semantic":
+            mapper = WaymoLidarSemanticDatasetMapper(cfg, False)
         else:
             mapper = DatasetMapper(cfg, False)
         return build_detection_test_loader(cfg, dataset_name, mapper=mapper)
+
+    @classmethod
+    def build_train_loader(cls, cfg):
+        if cfg.INPUT.DATASET_MAPPER_NAME == "muses_unified":
+            mapper = MUSESUnifiedDatasetMapper(cfg, True)
+        elif cfg.INPUT.DATASET_MAPPER_NAME == "deliver_semantic":
+            mapper = DELIVERSemanticDatasetMapper(cfg, True)
+        elif cfg.INPUT.DATASET_MAPPER_NAME == "waymo_lidar_semantic":
+            mapper = WaymoLidarSemanticDatasetMapper(cfg, True)
+        else:
+            mapper = None
+        return build_detection_train_loader(cfg, mapper=mapper)
+
+    @classmethod
+    def build_lr_scheduler(cls, cfg, optimizer):
+        return build_lr_scheduler(cfg, optimizer)
+
+    @classmethod
+    def build_optimizer(cls, cfg, model):
+        weight_decay_norm = cfg.SOLVER.WEIGHT_DECAY_NORM
+        weight_decay_embed = cfg.SOLVER.WEIGHT_DECAY_EMBED
+
+        defaults = {
+            "lr": cfg.SOLVER.BASE_LR,
+            "weight_decay": cfg.SOLVER.WEIGHT_DECAY,
+        }
+
+        norm_module_types = (
+            torch.nn.BatchNorm1d,
+            torch.nn.BatchNorm2d,
+            torch.nn.BatchNorm3d,
+            torch.nn.SyncBatchNorm,
+            torch.nn.GroupNorm,
+            torch.nn.InstanceNorm1d,
+            torch.nn.InstanceNorm2d,
+            torch.nn.InstanceNorm3d,
+            torch.nn.LayerNorm,
+            torch.nn.LocalResponseNorm,
+        )
+
+        params = []
+        memo = set()
+        for module_name, module in model.named_modules():
+            for module_param_name, value in module.named_parameters(recurse=False):
+                if not value.requires_grad or value in memo:
+                    continue
+                memo.add(value)
+
+                hyperparams = copy.copy(defaults)
+                if "backbone" in module_name:
+                    hyperparams["lr"] = hyperparams["lr"] * cfg.SOLVER.BACKBONE_MULTIPLIER
+                if (
+                    "relative_position_bias_table" in module_param_name
+                    or "absolute_pos_embed" in module_param_name
+                ):
+                    hyperparams["weight_decay"] = 0.0
+                if isinstance(module, norm_module_types):
+                    hyperparams["weight_decay"] = weight_decay_norm
+                if isinstance(module, torch.nn.Embedding):
+                    hyperparams["weight_decay"] = weight_decay_embed
+                params.append({"params": [value], **hyperparams})
+
+        def maybe_add_full_model_gradient_clipping(optim):
+            clip_norm_val = cfg.SOLVER.CLIP_GRADIENTS.CLIP_VALUE
+            enable = (
+                cfg.SOLVER.CLIP_GRADIENTS.ENABLED
+                and cfg.SOLVER.CLIP_GRADIENTS.CLIP_TYPE == "full_model"
+                and clip_norm_val > 0.0
+            )
+
+            class FullModelGradientClippingOptimizer(optim):
+                def step(self, closure=None):
+                    all_params = itertools.chain(*[x["params"] for x in self.param_groups])
+                    torch.nn.utils.clip_grad_norm_(all_params, clip_norm_val)
+                    super().step(closure=closure)
+
+            return FullModelGradientClippingOptimizer if enable else optim
+
+        optimizer_type = cfg.SOLVER.OPTIMIZER
+        if optimizer_type == "SGD":
+            optimizer = maybe_add_full_model_gradient_clipping(torch.optim.SGD)(
+                params, cfg.SOLVER.BASE_LR, momentum=cfg.SOLVER.MOMENTUM
+            )
+        elif optimizer_type == "ADAMW":
+            optimizer = maybe_add_full_model_gradient_clipping(torch.optim.AdamW)(
+                params, cfg.SOLVER.BASE_LR
+            )
+        else:
+            raise NotImplementedError(f"no optimizer type {optimizer_type}")
+        if not cfg.SOLVER.CLIP_GRADIENTS.CLIP_TYPE == "full_model":
+            optimizer = maybe_add_gradient_clipping(cfg, optimizer)
+        return optimizer
     
     @classmethod
     def test(cls, cfg, model, evaluators=None, eval_only=False, inference_only=False):
@@ -375,6 +501,8 @@ def setup(args):
     add_depth_prediction_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
+    if cfg.MODEL.DEVICE.startswith("cuda") and not torch.cuda.is_available():
+        cfg.MODEL.DEVICE = "cpu"
     cfg.freeze()
     default_setup(cfg, args)
     if not args.eval_only and not args.inference_only:
@@ -393,22 +521,22 @@ def main(args):
         raise Exception("You can only run inference or evaluation, not both at the same time.")
 
     elif args.eval_only or args.inference_only:
-        model = Tester.build_model(cfg)
+        model = Trainer.build_model(cfg)
         net_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print("Total Params: {} M".format(net_params/1e6))
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
             cfg.MODEL.WEIGHTS, resume=args.resume
         )
-        res = Tester.test(cfg, model, eval_only=args.eval_only, inference_only=args.inference_only)
+        res = Trainer.test(cfg, model, eval_only=args.eval_only, inference_only=args.inference_only)
         if cfg.TEST.AUG.ENABLED:
-            res.update(Tester.test_with_TTA(cfg, model))
+            res.update(Trainer.test_with_TTA(cfg, model))
         if comm.is_main_process():
             verify_results(cfg, res)
         return res
 
-    raise Exception(
-        "Training code for DGFusion is not provided. Please use the inference or evaluation mode."
-    )
+    trainer = Trainer(cfg)
+    trainer.resume_or_load(resume=args.resume)
+    return trainer.train()
 
 
 if __name__ == "__main__":

@@ -21,9 +21,18 @@ from detectron2.layers.wrappers import move_device_like, shapes_to_tensor
 
 from oneformer.utils.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_list
 from oneformer.utils import box_ops
+from oneformer.modeling.criterion import dist_collect, dice_loss, sigmoid_ce_loss, calculate_uncertainty
 import torch.distributed as dist
 import diffdist.functional as diff_dist
 import numpy as np
+
+sigmoid_ce_loss_jit = torch.jit.script(
+    sigmoid_ce_loss
+)
+
+dice_loss_jit = torch.jit.script(
+    dice_loss
+)
 
 def silog_loss(pred: Tensor,
                target: [Tensor],
@@ -473,6 +482,8 @@ class SetCriterion(nn.Module):
         pred_depth = outputs["pred_depth"]
         gt_depths = [t["gt_depth"] for t in targets]
         gt_depths = tensors_to_batch(gt_depths)
+        if gt_depths.dim() == 3:
+            gt_depths = gt_depths.unsqueeze(1)
 
         if self.depth_in_log_scale:
             log_pred = pred_depth

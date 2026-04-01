@@ -102,33 +102,34 @@ class DGFusion(OneFormer):
         main_modality = cfg.DATASETS.MODALITIES.MAIN_MODALITY.upper()
 
         # Check for consitancy in the config file
-        if "muses" in cfg.INPUT.DATASET_MAPPER_NAME.lower():
+        mapper_name = cfg.INPUT.DATASET_MAPPER_NAME.lower()
+        if "muses" in mapper_name or "waymo" in mapper_name:
             assert cfg.DATASETS.PIXEL_MEAN[main_modality] == cfg.MODEL.PIXEL_MEAN, f'{cfg.DATASETS.PIXEL_MEAN[main_modality]} incosistant with {cfg.MODEL.PIXEL_MEAN}'
             assert cfg.DATASETS.PIXEL_STD[main_modality] == cfg.MODEL.PIXEL_STD, f'{cfg.DATASETS.PIXEL_STD[main_modality]} incosistant with {cfg.MODEL.PIXEL_STD}'
             pixel_mean = copy.deepcopy(cfg.DATASETS.PIXEL_MEAN[main_modality])
             pixel_std = copy.deepcopy(cfg.DATASETS.PIXEL_STD[main_modality])    
-        elif "deliver" in cfg.INPUT.DATASET_MAPPER_NAME.lower():
+        elif "deliver" in mapper_name:
             pixel_mean = copy.deepcopy(cfg.DATASETS.DELIVER.PIXEL_MEAN[main_modality])
             pixel_std = copy.deepcopy(cfg.DATASETS.DELIVER.PIXEL_STD[main_modality])
         else:
-            raise Exception
+            raise Exception(f"Unsupported dataset mapper: {cfg.INPUT.DATASET_MAPPER_NAME}")
         modalities = [main_modality]
         for modality in cfg.DATASETS.MODALITIES.ORDER:
             modality_key = modality.upper()
             if modality_key != main_modality:
-                if "muses" in cfg.INPUT.DATASET_MAPPER_NAME.lower():
+                if "muses" in mapper_name or "waymo" in mapper_name:
                     if cfg.DATASETS.MODALITIES[modality_key].LOAD:
                         if modality == "REF_IMAGE":
                             modality_key = "CAMERA"
                         pixel_mean.extend(cfg.DATASETS.PIXEL_MEAN[modality_key])
                         pixel_std.extend(cfg.DATASETS.PIXEL_STD[modality_key])
                         modalities.append(modality_key)
-                elif "deliver" in cfg.INPUT.DATASET_MAPPER_NAME.lower():
+                elif "deliver" in mapper_name:
                     pixel_mean.extend(cfg.DATASETS.DELIVER.PIXEL_MEAN[modality_key])
                     pixel_std.extend(cfg.DATASETS.DELIVER.PIXEL_STD[modality_key])
                     modalities.append(modality_key)
                 else:
-                    raise Exception
+                    raise Exception(f"Unsupported dataset mapper: {cfg.INPUT.DATASET_MAPPER_NAME}")
         assert len(pixel_mean) / 3 == len(modalities)
 
         if cfg.MODEL.FEATURE_ADAPTER.ENABLED:            
@@ -409,9 +410,27 @@ class DGFusion(OneFormer):
         outputs = {**outputs, **sem_seg_outputs}
 
         if self.training:
-            raise Exception(
-                "Training code for DGFusion is not provided. Please use the inference or evaluation mode."
-            )
+            texts = torch.cat([self.text_tokenizer(x["text"]).to(self.device).unsqueeze(0) for x in batched_inputs], dim=0)
+            texts_x = self.encode_text(texts)
+            outputs = {**outputs, **texts_x}
+
+            if self.condition_text_encoder_module:
+                text_condition = self.condition_text_encoder_module(batched_inputs)
+                outputs = {**outputs, **q_condition_contrastive_logits, **text_condition}
+
+            if "instances" in batched_inputs[0]:
+                gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+                targets = self.prepare_targets(gt_instances, batched_inputs, images)
+            else:
+                targets = None
+
+            losses = self.criterion(outputs, targets)
+            for k in list(losses.keys()):
+                if k in self.criterion.weight_dict:
+                    losses[k] *= self.criterion.weight_dict[k]
+                else:
+                    losses.pop(k)
+            return losses
         else:
             mask_cls_results = outputs["pred_logits"]
             mask_pred_results = outputs["pred_masks"]
@@ -474,6 +493,28 @@ class DGFusion(OneFormer):
                     processed_results[-1]["pred_depth"] = depth_result
 
             return processed_results
+
+    def prepare_targets(self, targets, batched_inputs, images):
+        h_pad, w_pad = images.tensor.shape[-2:]
+        new_targets = []
+        for targets_per_image, batched_input in zip(targets, batched_inputs):
+            gt_masks = targets_per_image.gt_masks
+            padded_masks = torch.zeros(
+                (gt_masks.shape[0], h_pad, w_pad),
+                dtype=gt_masks.dtype,
+                device=gt_masks.device,
+            )
+            padded_masks[:, : gt_masks.shape[1], : gt_masks.shape[2]] = gt_masks
+            target = {
+                "labels": targets_per_image.gt_classes,
+                "masks": padded_masks,
+                "image": batched_input["image"].to(self.device),
+                "sem_seg": batched_input["sem_seg"].to(self.device),
+            }
+            if "gt_depth" in batched_input:
+                target["gt_depth"] = batched_input["gt_depth"].to(self.device)
+            new_targets.append(target)
+        return new_targets
     
     def panoptic_inference(self, mask_cls, mask_pred):
         scores, labels = F.softmax(mask_cls, dim=-1).max(-1)
