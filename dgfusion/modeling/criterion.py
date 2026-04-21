@@ -17,7 +17,14 @@ from detectron2.projects.point_rend.point_features import (
     get_uncertain_point_coords_with_randomness,
     point_sample,
 )
-from detectron2.layers.wrappers import move_device_like, shapes_to_tensor
+try:
+    from detectron2.layers.wrappers import move_device_like, shapes_to_tensor
+except ImportError:
+    from detectron2.layers.wrappers import shapes_to_tensor
+
+    def move_device_like(src, dst):
+        return src.to(dst.device)
+
 
 from oneformer.utils.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_list
 from oneformer.utils import box_ops
